@@ -1,0 +1,8 @@
+# Ignore all the files in these Directories
+Debug/
+Release/
+ipch/
+
+*.sdf
+*.suo
+*.db

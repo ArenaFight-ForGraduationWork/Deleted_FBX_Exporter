@@ -11,28 +11,16 @@ int APIENTRY _tWinMain(_In_ HINSTANCE hInstance,
 	CFbx *pFbx = new CFbx();
 
 	//// 애니메이션 없음
-	//pFbx->FbxModel_Initialize("Data\\Grass\\grass.fbx");
-	//pFbx->Fbx_VertexParsing(D3DXVECTOR3(1, 1, 1), "Data\\Brock_Info.txt");
+	//pFbx->Import("Data\\Grass\\grass.fbx", "Grass");
 
 	// 애니메이션 있음
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@attack.FBX");
-	pFbx->FbxModel_Initialize("Data\\monster\\mst@dash.FBX");
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@dead.FBX");
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@idle.FBX");
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@jump.FBX");
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@jumpjump.FBX");
-	//pFbx->FbxModel_Initialize("Data\\monster\\mst@move.FBX");
-
-	pFbx->Fbx_VertexParsing(D3DXVECTOR3(1, 1, 1), "Data\\MainCharacter_Info.txt");	// _info
-	pFbx->FindMinMaxVerPos();	// _info에 min/max 덮어쓰기(추가)
-
-	pFbx->SetFbxBoneMatrix(pFbx->GetRoot());
-	int m_nVertices = pFbx->GetSize();
-	CAnimationVertex *v = new CAnimationVertex[m_nVertices];
-	pFbx->Fbx_AnimationVertexParsing(pFbx->GetRoot(), v);
-
-	pFbx->WriteWeight(v);	// _weight
-	pFbx->Fbx_WriteTextFile_Animation();	// _matrix
+	//pFbx->Import("Data\\monster\\mst@attack.FBX", "Slime", "attack");
+	pFbx->Import("Data\\monster\\mst@dash.FBX", "Slime", "dash");
+	//pFbx->Import("Data\\monster\\mst@dead.FBX", "Slime", "dead");
+	//pFbx->Import("Data\\monster\\mst@idle.FBX", "Slime", "idle");
+	//pFbx->Import("Data\\monster\\mst@jump.FBX", "Slime", "jump");
+	//pFbx->Import("Data\\monster\\mst@jumpjump.FBX", "Slime", "jumpjump");
+	//pFbx->Import("Data\\monster\\mst@move.FBX", "Slime", "move");
 
 	return 0;
 }

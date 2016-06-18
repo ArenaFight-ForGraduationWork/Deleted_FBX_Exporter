@@ -1,35 +1,79 @@
 #include "stdafx.h"
 #include "Fbx.h"
 
+#define AnimationNodeCount 40	// 애니메이션에 영향을 받는 animation Node 개수
+								// m_uiAnimationNodeIndexCount = m_IndexByName.size();
+								// _matrix파일 맨 윗줄 두번째 인자
+
 
 
 CFbx::CFbx()
 {
-	m_fAnimationPlayTime = 0.0f;
-	m_llAnimationMaxTime = 0;
-	m_pAnimationMatrix = nullptr;
+	m_pFbxScene = nullptr;
+	m_pRoot = nullptr;
 
-	m_pBaseBoneMatrix = new XMFLOAT4X4[128];
-	for (int i = 0; i < 128; ++i)
+	m_VertexByIndex.clear();
+	m_IndexByName.clear();
+
+	m_pBaseBoneMatrix = new XMFLOAT4X4[AnimationNodeCount];
+	for (int i = 0; i < AnimationNodeCount; ++i)
 	{
 		XMStoreFloat4x4(&m_pBaseBoneMatrix[i], XMMatrixIdentity());
 	}
-
+	m_pAnimationMatrix = nullptr;
 	m_ppResultMatrix = nullptr;
+
+	m_llAnimationMaxTime = 0;
+	m_uiAnimationNodeIndexCount = 0;
+	m_fAnimationPlayTime = 0.0f;
+
+	temp = 0;
+	m_iSize = 0;
+
+	m_pTxtName = nullptr;
+	m_pTxtNameAfterMatrix = nullptr;
+
+	m_MaxVer = FbxVector4(0, 0, 0, 0);
+	m_MinVer = FbxVector4(0, 0, 0, 0);
+
+	m_pVertices = nullptr;
 }
 CFbx::~CFbx()
 {
-	m_ppResultMatrix = nullptr;
-
-	if (m_pBaseBoneMatrix)
-		delete[] m_pBaseBoneMatrix;
 }
 
-FbxAMatrix CFbx::GetGeometryTransformation(FbxNode* inNode)
+void CFbx::Import(char* pFileName, char* pTxtName, char* pTxtNameAfterMatrix)
+{
+	m_pTxtName = pTxtName;
+	m_pTxtNameAfterMatrix = pTxtNameAfterMatrix;
+
+	_Initialize(pFileName);
+
+	if (!m_pTxtNameAfterMatrix)
+	{	// 애니메이션이 없음
+		_WriteVertex();
+	}
+	else
+	{ // 애니메이션이 있음
+		_WriteVertex();	// _info
+		_WriteMinMaxPos();	// _info에 min/max 덮어쓰기(추가)
+
+		_SetBoneMatrix(m_pRoot);
+		_SetAnimationData(m_pRoot);
+
+		_WriteWeight();	// _weight
+		_WriteAnimationMatrix();	// _matrix
+	}
+}
+
+
+
+FbxAMatrix CFbx::_GetGeometryTransformation(FbxNode* inNode)
 {
 	if (!inNode)
 	{
-		throw std::exception("Null for mesh geometry");
+		//throw std::exception("Null for mesh geometry");
+		Warning("Null for mesh geometry");
 	}
 
 	const FbxVector4 lT = inNode->GetGeometricTranslation(FbxNode::eSourcePivot);
@@ -39,9 +83,9 @@ FbxAMatrix CFbx::GetGeometryTransformation(FbxNode* inNode)
 	return FbxAMatrix(lT, lR, lS);
 }
 
-void CFbx::FbxModel_Initialize(char* pFileName)
+void CFbx::_Initialize(char* pFileName)
 {
-	m_pFbxManager = FbxManager::Create();
+	FbxManager* m_pFbxManager = FbxManager::Create();
 	FbxIOSettings* pFbxIOsetting = FbxIOSettings::Create(m_pFbxManager, IOSROOT);
 	m_pFbxManager->SetIOSettings(pFbxIOsetting);
 	m_pFbxScene = FbxScene::Create(m_pFbxManager, "");
@@ -49,13 +93,12 @@ void CFbx::FbxModel_Initialize(char* pFileName)
 
 	if (!pImporter->Initialize(pFileName, -1, m_pFbxManager->GetIOSettings()))
 	{
-		cout << "FBXimporter Initialize fail" << endl;
-		cout << "파일이 지정한 경로나 위치에 없을 수도 있습니다. " << endl;
+		Warning("FBX importer Initialize fail\n파일이 지정한 경로나 위치에 없을 수도 있습니다.");
 	}
 
 	if (!pImporter->Import(m_pFbxScene))
 	{
-		cout << "FBX importer Import Scene fail" << endl;
+		Warning("FBX importer Import Scene fail");
 	}
 
 	FbxAxisSystem CurrAxisSystem = m_pFbxScene->GetGlobalSettings().GetAxisSystem();	//현재 축 형태
@@ -65,7 +108,7 @@ void CFbx::FbxModel_Initialize(char* pFileName)
 	FbxGeometryConverter lGeomConverter(m_pFbxManager);
 	if (!lGeomConverter.Triangulate(m_pFbxScene, true))
 	{
-		cout << "Mesh transform fail" << endl;
+		Warning("Mesh transform fail");
 	}
 
 	pImporter->Destroy();
@@ -73,9 +116,13 @@ void CFbx::FbxModel_Initialize(char* pFileName)
 	m_pRoot = m_pFbxScene->GetRootNode();
 }
 
-void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
+void CFbx::_WriteVertex()
 {
-	fopen_s(&fp, txtName, "wt");
+	FILE *fp;
+	char pPath[50] = "Data\\";
+	strcat_s(pPath, 50, m_pTxtName);
+	strcat_s(pPath, 50, "_info.txt");
+	fopen_s(&fp, pPath, "wt");
 
 	for (int i = 0; i < m_pRoot->GetChildCount(); ++i)
 	{
@@ -91,13 +138,13 @@ void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
 		const unsigned int ctrlPointCnt = pMesh->GetControlPointsCount();
 		const unsigned int polygonCnt = pMesh->GetPolygonCount();
 		const unsigned int polygonVertexCnt = pMesh->GetPolygonVertexCount();
-		size = polygonVertexCnt;
+		m_iSize = polygonVertexCnt;
+		m_pVertices = new CAnimationVertex[m_iSize];
 		fprintf(fp, "%d\n", polygonVertexCnt);
 
-		D3DXVECTOR3 outPos;
-		D3DXVECTOR3 outNormal;
-		D3DXVECTOR3 outUV;
-		FbxVector4 outFbxNormal;
+		FbxVector4 outPos;
+		FbxVector4 outNormal;
+		FbxVector2 outUV;
 
 		FbxVector4* mControlPoint = pMesh->GetControlPoints();
 		FbxGeometryElementUV* vertexUV = pMesh->GetElementUV(0);
@@ -109,25 +156,24 @@ void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
 			int iNumVertieces = pMesh->GetPolygonSize(j);
 			if (iNumVertieces != 3)
 			{
-				cout << "폴리곤이 삼각형이 아님" << endl;
+				Warning("폴리곤이 삼각형이 아니다");
 			}
 			else //3개로 잘 나뉘어있으면
 			{
 				for (int k = 0; k < iNumVertieces; k++)
 				{
 					int iPolygonVertexNum = pMesh->GetPolygonVertex(j, k);
-					int iNormalIndex = pMesh->GetPolygonVertexNormal(j, k, outFbxNormal);
+					int iNormalIndex = pMesh->GetPolygonVertexNormal(j, k, outNormal);
 					int iTextureUVIndex = pMesh->GetTextureUVIndex(j, k);
 
 					// position
-					outPos.x = (float)mControlPoint[iPolygonVertexNum].mData[0] * d3dxvScale.x;
-					outPos.y = (float)mControlPoint[iPolygonVertexNum].mData[1] * d3dxvScale.y;
-					outPos.z = (float)mControlPoint[iPolygonVertexNum].mData[2] * d3dxvScale.z;
+					outPos.mData[0] = mControlPoint[iPolygonVertexNum].mData[0];
+					outPos.mData[1] = mControlPoint[iPolygonVertexNum].mData[1];
+					outPos.mData[2] = mControlPoint[iPolygonVertexNum].mData[2];
+					fprintf(fp, "%f %f %f\n", outPos.mData[0], outPos.mData[1], outPos.mData[2]);
 
 					// normal
-					outNormal.x = outFbxNormal.mData[0];
-					outNormal.y = outFbxNormal.mData[1];
-					outNormal.z = outFbxNormal.mData[2];
+					fprintf(fp, "%f %f %f\n", outNormal.mData[0], outNormal.mData[1], outNormal.mData[2]);
 
 					// uv
 					switch (vertexUV->GetMappingMode())
@@ -137,17 +183,17 @@ void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
 						{
 						case FbxGeometryElement::eDirect:
 						{
-							outUV.x = static_cast<float>(vertexUV->GetDirectArray().GetAt(iPolygonVertexNum).mData[0]);
-							outUV.y = 1 - static_cast<float>(vertexUV->GetDirectArray().GetAt(iPolygonVertexNum).mData[1]);
+							outUV.mData[0] = vertexUV->GetDirectArray().GetAt(iPolygonVertexNum).mData[0];
+							outUV.mData[1] = 1 - vertexUV->GetDirectArray().GetAt(iPolygonVertexNum).mData[1];
 						}break;
 						case FbxGeometryElement::eIndexToDirect:
 						{
 							int index = vertexUV->GetIndexArray().GetAt(iPolygonVertexNum);
-							outUV.x = static_cast<float>(vertexUV->GetDirectArray().GetAt(index).mData[0]);
-							outUV.y = 1 - static_cast<float>(vertexUV->GetDirectArray().GetAt(index).mData[1]);
+							outUV.mData[0] = vertexUV->GetDirectArray().GetAt(index).mData[0];
+							outUV.mData[1] = 1 - vertexUV->GetDirectArray().GetAt(index).mData[1];
 						}break;
 						default:
-							throw std::exception("Invalid Reference");
+							Warning("UV Invalid Reference");
 						}break;
 					case FbxGeometryElement::eByPolygonVertex:
 						switch (vertexUV->GetReferenceMode())
@@ -155,19 +201,16 @@ void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
 						case FbxGeometryElement::eDirect:
 						case FbxGeometryElement::eIndexToDirect:
 						{
-							outUV.x = static_cast<float>(vertexUV->GetDirectArray().GetAt(iTextureUVIndex).mData[0]);
-							outUV.y = 1 - static_cast<float>(vertexUV->GetDirectArray().GetAt(iTextureUVIndex).mData[1]);
+							outUV.mData[0] = vertexUV->GetDirectArray().GetAt(iTextureUVIndex).mData[0];
+							outUV.mData[1] = 1 - vertexUV->GetDirectArray().GetAt(iTextureUVIndex).mData[1];
 						}break;
 						default:
-							throw std::exception("Invalid Reference");
+							Warning("UV Invalid Reference");
 						}break;
 					default:
-						throw std::exception("Invalid Reference");
+						Warning("UV Invalid Reference");
 					}
-
-					fprintf(fp, "%f %f %f\n", outPos.x, outPos.y, outPos.z);
-					fprintf(fp, "%f %f %f\n", outNormal.x, outNormal.y, outNormal.z);
-					fprintf(fp, "%f %f\n", outUV.x, outUV.y);
+					fprintf(fp, "%f %f\n", outUV.mData[0], outUV.mData[1]);
 				}
 			}
 		}
@@ -176,30 +219,26 @@ void CFbx::Fbx_VertexParsing(D3DXVECTOR3 d3dxvScale, char* txtName)
 	fclose(fp);
 }
 
-void CFbx::Fbx_AnimationVertexParsing(FbxNode* pNode, CAnimationVertex* v)
+void CFbx::_SetAnimationData(FbxNode* pNode)
 {
 	FbxNodeAttribute *pFbxNodeAttribute = pNode->GetNodeAttribute();
-	if (pFbxNodeAttribute != nullptr && pFbxNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh)
+	if (pFbxNodeAttribute && pFbxNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh)
 	{
 		FbxMesh* pMesh = pNode->GetMesh();
 		const unsigned int IndexCount = pMesh->GetPolygonVertexCount();	//const unsigned int하면 안되던데 왤까
-		cout << "PolygonVertexCnt:   " << IndexCount << endl;
 		temp = IndexCount;
 
 		int *IndexArr = new int[IndexCount];
 
-		for (int i = 0; i < IndexCount; ++i)
+		for (unsigned int i = 0; i < IndexCount; ++i)
 		{
 			IndexArr[i] = pMesh->GetPolygonVertices()[i];
 			m_VertexByIndex[IndexArr[i]].push_back(i);
 		}
-		/*----------------------------------------------------------*/
 
-		FbxAMatrix geometryTransform = GetGeometryTransformation(pNode);
-
+		FbxAMatrix geometryTransform = _GetGeometryTransformation(pNode);
 		FbxGeometry *pGeo = pNode->GetGeometry();
 		int SkinCount = pGeo->GetDeformerCount(FbxDeformer::eSkin);
-
 		for (int i = 0; i < SkinCount; ++i)
 		{
 			FbxSkin* pSkin = (FbxSkin*)pGeo->GetDeformer(i, FbxDeformer::eSkin);
@@ -214,7 +253,6 @@ void CFbx::Fbx_AnimationVertexParsing(FbxNode* pNode, CAnimationVertex* v)
 
 				for (int k = 0; k < ClusterIndexCount; k++)
 				{
-
 					std::string BoneName = std::string(pCluster->GetLink()->GetName());
 					int INDEX = m_IndexByName[BoneName];
 
@@ -230,8 +268,7 @@ void CFbx::Fbx_AnimationVertexParsing(FbxNode* pNode, CAnimationVertex* v)
 					{
 						for (int n = 0; n < 4; n++)
 						{
-							//오류가 났던건 매트릭스 초기화를 안해줘서!!! 생성자에서 초기화 시켜줬다..
-							m_pBaseBoneMatrix[INDEX].m[m][n] = ResultMtx.Get(m, n);
+							m_pBaseBoneMatrix[INDEX].m[m][n] = static_cast<float>(ResultMtx.Get(m, n));
 						}
 					}
 
@@ -240,35 +277,29 @@ void CFbx::Fbx_AnimationVertexParsing(FbxNode* pNode, CAnimationVertex* v)
 
 					for (auto iter : m_VertexByIndex[BoneIndex])
 					{
-						if (INDEX == 0 || INDEX == -1)
+						if (INDEX != 0 && INDEX != -1)
 						{
-
-						}
-						else
-						{
-							v[iter].AddBone(INDEX, BoneWeight);
+							m_pVertices[iter].AddBone(INDEX, BoneWeight);
 						}
 					}
 				}
 
 			}
 		}
-
-		delete[]IndexArr;
+		delete[] IndexArr;
 	}
 
-
-	int nNodeChilde = pNode->GetChildCount();
-	for (int i = 0; i < nNodeChilde; ++i)
+	int nNodeChild = pNode->GetChildCount();
+	for (int i = 0; i < nNodeChild; ++i)
 	{
 		FbxNode* pChildNode = pNode->GetChild(i);
-		Fbx_AnimationVertexParsing(pChildNode, v);
+		_SetAnimationData(pChildNode);
 	}
 }
 
-void CFbx::Fbx_AnimationParsing(FbxNode *pNode, FbxAnimStack *FbxAS)
+void CFbx::_SetAnimationMatrix(FbxNode *pNode, FbxAnimStack *FbxAS)
 {
-	if (pNode != nullptr)
+	if (pNode)
 	{
 		unsigned int BoneIndex = m_IndexByName[pNode->GetName()];	//m_IndexByName.size();
 
@@ -282,28 +313,27 @@ void CFbx::Fbx_AnimationParsing(FbxNode *pNode, FbxAnimStack *FbxAS)
 			{
 				for (int n = 0; n < 4; ++n)
 				{
-					m_pAnimationMatrix[i][BoneIndex].m[m][n] = (pNode->EvaluateGlobalTransform(n_time)).Get(m, n);
+					m_pAnimationMatrix[i][BoneIndex].m[m][n] = static_cast<float>((pNode->EvaluateGlobalTransform(n_time)).Get(m, n));
 				}
 			}
 
 			XMFLOAT4X4 pp = m_pAnimationMatrix[i][BoneIndex];
-			int a = 1 + 1;
 		}
 	}
 
 	for (int i = 0; i < pNode->GetChildCount(); ++i)
 	{
-		Fbx_AnimationParsing(pNode->GetChild(i), FbxAS);
+		_SetAnimationMatrix(pNode->GetChild(i), FbxAS);
 	}
 }
 
-void CFbx::FindMinMaxVerPos()
+void CFbx::_WriteMinMaxPos()
 {
-	float x = 0;
-	float y = 0;
-	float z = 0;
-
-	fopen_s(&fp, "Data\\MainCharacter_Info.txt", "a+");
+	FILE *fp;
+	char pPath[50] = "Data\\";
+	strcat_s(pPath, 50, m_pTxtName);
+	strcat_s(pPath, 50, "_info.txt");
+	fopen_s(&fp, pPath, "a+");
 
 	for (int i = 0; i < m_pRoot->GetChildCount(); ++i)
 	{
@@ -316,67 +346,75 @@ void CFbx::FindMinMaxVerPos()
 		FbxMesh* pMesh = (FbxMesh*)pFbxChildNode->GetNodeAttribute();
 
 		FbxVector4* mControlPoints = pMesh->GetControlPoints();
+
 		//max
 		for (int j = 0; j < pMesh->GetControlPointsCount(); ++j)
 		{
-			if (x < (float)mControlPoints[j].mData[0])
-				x = (float)mControlPoints[j].mData[0];
-			if (y < (float)mControlPoints[j].mData[1])
-				y = (float)mControlPoints[j].mData[1];
-			if (z < (float)mControlPoints[j].mData[2])
-				z = (float)mControlPoints[j].mData[2];
+			if (m_MaxVer.mData[0] < mControlPoints[j].mData[0])
+				m_MaxVer.mData[0] = mControlPoints[j].mData[0];
+
+			if (m_MaxVer.mData[1] < mControlPoints[j].mData[2])
+				m_MaxVer.mData[1] = mControlPoints[j].mData[2];
+
+			if (m_MaxVer.mData[2] < mControlPoints[j].mData[1])
+				m_MaxVer.mData[2] = mControlPoints[j].mData[1];
 		}
-		m_MaxVer = D3DXVECTOR3(x, z, y);
+		fprintf(fp, "%f %f %f\n", m_MaxVer.mData[0], m_MaxVer.mData[1], m_MaxVer.mData[2]);
 
-		m_MaxVer.x *= 1;
-		m_MaxVer.y *= 1;
-		m_MaxVer.z *= 1;
-
-		fprintf(fp, "%f %f %f\n", m_MaxVer.x, m_MaxVer.y, m_MaxVer.z);
-
-		x, y, z = 0;
+		// min
 		for (int j = 0; j < pMesh->GetControlPointsCount(); ++j)
 		{
-			if (x > (float)mControlPoints[j].mData[0])
-				x = (float)mControlPoints[j].mData[0];
-			if (y > (float)mControlPoints[j].mData[1])
-				y = (float)mControlPoints[j].mData[1];
-			if (z > (float)mControlPoints[j].mData[2])
-				z = (float)mControlPoints[j].mData[2];
-		}
-		m_MinVer = D3DXVECTOR3(x, z, y);
-		m_MinVer.x *= 1;
-		m_MinVer.y *= 1;
-		m_MinVer.z *= 1;
+			if (m_MinVer.mData[0] > mControlPoints[j].mData[0])
+				m_MinVer.mData[0] = mControlPoints[j].mData[0];
 
-		fprintf(fp, "%f %f %f\n", m_MinVer.x, m_MinVer.y, m_MinVer.z);
+			if (m_MinVer.mData[1] > mControlPoints[j].mData[2])
+				m_MinVer.mData[1] = mControlPoints[j].mData[2];
+
+			if (m_MinVer.mData[2] > mControlPoints[j].mData[1])
+				m_MinVer.mData[2] = mControlPoints[j].mData[1];
+		}
+		fprintf(fp, "%f %f %f\n", m_MinVer.mData[0], m_MinVer.mData[1], m_MinVer.mData[2]);
 	}
 
 	fclose(fp);
 }
 
-void CFbx::WriteWeight(CAnimationVertex* v)
+void CFbx::_WriteWeight()
 {
-	fopen_s(&fp, "Data\\MainCharacter_Weight.txt", "wt");
+	FILE *fp;
+	char pPath[50] = "Data\\";
+	strcat_s(pPath, 50, m_pTxtName);
+	strcat_s(pPath, 50, "_weight.txt");
+	fopen_s(&fp, pPath, "wt");
 
 	for (int i = 0; i < temp; ++i)
 	{
 		for (int j = 0; j < 8; ++j)
 		{
-			fprintf(fp, "%d %d %f\n", i, v[i].BoneIndexArr[j], v[i].BoneWeightArr[j]);
+			fprintf(fp, "%d %d %f\n", i, m_pVertices[i].BoneIndexArr[j], m_pVertices[i].BoneWeightArr[j]);
 		}
 	}
 
 	fclose(fp);
 }
 
-void CFbx::Fbx_WriteTextFile_Animation()
+void CFbx::_WriteAnimationMatrix()
 {
+	if (!m_pTxtNameAfterMatrix)
+	{
+		Warning("_matrix 파일 뒤에 적을 이름을 Initialize함수에 안 적었다. 적어라");
+	}
+
+	FILE *fp;
+	char pPath[50] = "Data\\";
+	strcat_s(pPath, 50, m_pTxtName);
+	strcat_s(pPath, 50, "_matrix_");
+	strcat_s(pPath, 50, m_pTxtNameAfterMatrix);
+	strcat_s(pPath, 50, ".txt");
+	fopen_s(&fp, pPath, "wt");
+
 	FbxAnimStack* AnimStack = m_pFbxScene->GetSrcObject<FbxAnimStack>();
-
-	fopen_s(&fp, "Data\\MainCharacter_matrix.txt", "wt");
-
-	if (AnimStack != nullptr)
+	if (AnimStack)
 	{
 		//애니메이션 데이터 불러오기
 
@@ -388,8 +426,8 @@ void CFbx::Fbx_WriteTextFile_Animation()
 		m_uiAnimationNodeIndexCount = m_IndexByName.size();
 
 		//애니메이션 2차원 배열 생성
-		m_pAnimationMatrix = new XMFLOAT4X4*[m_llAnimationMaxTime / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
-		m_ppResultMatrix = new XMFLOAT4X4*[m_llAnimationMaxTime / 10];		//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
+		m_pAnimationMatrix = new XMFLOAT4X4*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
+		m_ppResultMatrix = new XMFLOAT4X4*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];		//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
 
 		for (long long i = 0; i < m_llAnimationMaxTime / 10; ++i)
 		{
@@ -398,7 +436,7 @@ void CFbx::Fbx_WriteTextFile_Animation()
 		}
 
 		//Animation Matrix채우기
-		Fbx_AnimationParsing(m_pRoot, AnimStack);
+		_SetAnimationMatrix(m_pRoot, AnimStack);
 
 		fprintf(fp, "%lld %d\n", m_llAnimationMaxTime, m_uiAnimationNodeIndexCount);
 
@@ -424,13 +462,30 @@ void CFbx::Fbx_WriteTextFile_Animation()
 	fclose(fp);
 }
 
-void CFbx::SetFbxBoneMatrix(FbxNode* pNode)
+void CFbx::_SetBoneMatrix(FbxNode* pNode)
 {
 	m_IndexByName[pNode->GetName()] = m_IndexByName.size();
 	for (int i = 0; i < pNode->GetChildCount(); i++)
 	{
-		this->SetFbxBoneMatrix(pNode->GetChild(i));
+		_SetBoneMatrix(pNode->GetChild(i));
 	}
 }
+
+
+
+
+
+
+
+
+void Warning(char* pWarningText)
+{
+	cout << pWarningText << endl;
+	cout << "아무 키나 누르면 종료합니다" << endl;
+	char a;
+	cin >> a;
+	exit(0);
+}
+
 
 

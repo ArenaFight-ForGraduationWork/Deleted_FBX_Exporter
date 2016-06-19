@@ -1,6 +1,7 @@
 #ifndef FBX_H_
 #define FBX_H_
 
+#include "stdafx.h"
 #include "Vertex.h"
 
 

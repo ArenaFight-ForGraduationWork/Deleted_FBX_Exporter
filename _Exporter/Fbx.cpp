@@ -17,7 +17,7 @@ CFbx::CFbx()
 	m_pAnimationMatrix = nullptr;
 	m_ppResultMatrix = nullptr;
 
-	m_llAnimationMaxTime = 0;
+	m_iAnimationMaxTime = 0;
 	m_uiAnimationNodeIndexCount = 0;
 	m_fAnimationPlayTime = 0.0f;
 
@@ -210,109 +210,6 @@ void CFbx::_WriteVertex()
 	fclose(fp);
 }
 
-void CFbx::_SetAnimationData(FbxNode* pNode)
-{
-	FbxNodeAttribute *pFbxNodeAttribute = pNode->GetNodeAttribute();
-	if (pFbxNodeAttribute && pFbxNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh)
-	{
-		FbxMesh* pMesh = pNode->GetMesh();
-
-		int *IndexArr = new int[m_iVertexSize];
-		for (unsigned int i = 0; i < m_iVertexSize; ++i)
-		{
-			IndexArr[i] = pMesh->GetPolygonVertices()[i];
-			m_VertexByIndex[IndexArr[i]].push_back(i);
-		}
-
-		FbxAMatrix geometryTransform = _GetGeometryTransformation(pNode);
-		FbxGeometry *pGeo = pNode->GetGeometry();
-		int SkinCount = pGeo->GetDeformerCount(FbxDeformer::eSkin);
-		for (int i = 0; i < SkinCount; ++i)
-		{
-			FbxSkin* pSkin = (FbxSkin*)pGeo->GetDeformer(i, FbxDeformer::eSkin);
-			int ClusterCount = pSkin->GetClusterCount();
-
-			for (int j = 0; j < ClusterCount; ++j)
-			{
-				FbxCluster *pCluster = pSkin->GetCluster(j);
-				int ClusterIndexCount = pCluster->GetControlPointIndicesCount();
-				int *ClusterIndices = pCluster->GetControlPointIndices();
-				double *ClusterWeights = pCluster->GetControlPointWeights();
-
-				for (int k = 0; k < ClusterIndexCount; k++)
-				{
-					std::string BoneName = std::string(pCluster->GetLink()->GetName());
-					int INDEX = m_IndexByName[BoneName];
-
-					FbxAMatrix transformMatrix;
-					FbxAMatrix transformLinkMatrix;
-					FbxAMatrix ResultMtx;
-
-					pCluster->GetTransformMatrix(transformMatrix); // The transformation of the mesh at binding time
-					pCluster->GetTransformLinkMatrix(transformLinkMatrix); // The transformation of the cluster(joint) at binding time from joint space to world space
-					ResultMtx = transformLinkMatrix.Inverse() * transformMatrix * geometryTransform;
-
-					for (int m = 0; m < 4; m++)
-					{
-						for (int n = 0; n < 4; n++)
-						{
-							m_pBaseBoneMatrix[INDEX].mData[m][n] = ResultMtx.Get(m, n);
-						}
-					}
-
-					float BoneWeight = (float)ClusterWeights[k];
-					int BoneIndex = ClusterIndices[k];
-
-					for (auto iter : m_VertexByIndex[BoneIndex])
-					{
-						if (INDEX != 0 && INDEX != -1)
-						{
-							m_pVertices[iter].AddBone(INDEX, BoneWeight);
-						}
-					}
-				}
-
-			}
-		}
-		delete[] IndexArr;
-	}
-
-	int nNodeChild = pNode->GetChildCount();
-	for (int i = 0; i < nNodeChild; ++i)
-	{
-		FbxNode* pChildNode = pNode->GetChild(i);
-		_SetAnimationData(pChildNode);
-	}
-}
-
-void CFbx::_SetAnimationMatrix(FbxNode *pNode, FbxAnimStack *FbxAS)
-{
-	if (pNode)
-	{
-		unsigned int BoneIndex = m_IndexByName[pNode->GetName()];	//m_IndexByName.size();
-
-		FbxTime maxTime = FbxAS->GetLocalTimeSpan().GetDuration();
-		for (long long i = 0; i < maxTime.GetMilliSeconds() / 10; ++i)
-		{
-			FbxTime n_time;
-			n_time.SetMilliSeconds(i * 10);
-
-			for (int m = 0; m < 4; ++m)
-			{
-				for (int n = 0; n < 4; ++n)
-				{
-					m_pAnimationMatrix[i][BoneIndex].mData[m][n] = pNode->EvaluateGlobalTransform(n_time).Get(m, n);
-				}
-			}
-		}
-	}
-
-	for (int i = 0; i < pNode->GetChildCount(); ++i)
-	{
-		_SetAnimationMatrix(pNode->GetChild(i), FbxAS);
-	}
-}
-
 void CFbx::_WriteMinMaxPos()
 {
 	FILE *fp;
@@ -376,7 +273,8 @@ void CFbx::_WriteWeight()
 	{
 		for (int j = 0; j < 8; ++j)
 		{
-			fprintf(fp, "%d %d %f\n", i, m_pVertices[i].BoneIndexArr[j], m_pVertices[i].BoneWeightArr[j]);
+			//fprintf(fp, "%d %d %f\n", i, m_pVertices[i].BoneIndexArr[j], m_pVertices[i].BoneWeightArr[j]);
+			fprintf(fp, "%d %d %f\n", i, m_pVertices[i].GetBoneIndexArray(j), m_pVertices[i].GetBoneWeightArray(j));
 		}
 	}
 
@@ -402,16 +300,16 @@ void CFbx::_WriteAnimationMatrix()
 	if (AnimStack)
 	{
 		//애니메이션 최대길이
-		m_llAnimationMaxTime = AnimStack->GetLocalTimeSpan().GetDuration().GetMilliSeconds();
+		m_iAnimationMaxTime = static_cast<int>(AnimStack->GetLocalTimeSpan().GetDuration().GetMilliSeconds());
 
 		//애니메이션에 영향을 받는 animation Node 개수
 		m_uiAnimationNodeIndexCount = m_IndexByName.size();
 
 		//애니메이션 2차원 배열 생성
-		m_pAnimationMatrix = new FbxMatrix*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
-		m_ppResultMatrix = new FbxMatrix*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
+		m_pAnimationMatrix = new FbxMatrix*[m_iAnimationMaxTime / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
+		m_ppResultMatrix = new FbxMatrix*[m_iAnimationMaxTime / 10];	//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
 
-		for (long long i = 0; i < m_llAnimationMaxTime / 10; ++i)
+		for (int i = 0; i < m_iAnimationMaxTime / 10; ++i)
 		{
 			m_pAnimationMatrix[i] = new FbxMatrix[m_uiAnimationNodeIndexCount];	//i번째 시간대 : 배열에 애니메이션 노드 개수만큼 배열 할당
 			m_ppResultMatrix[i] = new FbxMatrix[m_uiAnimationNodeIndexCount];	//i번째 시간대 : 최종변환행렬에 애니메이션 노드 개수만큼 배열 할당
@@ -420,9 +318,9 @@ void CFbx::_WriteAnimationMatrix()
 		//Animation Matrix채우기
 		_SetAnimationMatrix(m_pRoot, AnimStack);
 
-		fprintf(fp, "%lld %d\n", m_llAnimationMaxTime, m_uiAnimationNodeIndexCount);
+		fprintf(fp, "%d %d\n", m_iAnimationMaxTime, m_uiAnimationNodeIndexCount);
 
-		for (long long i = 0; i < m_llAnimationMaxTime / 10; ++i)
+		for (int i = 0; i < m_iAnimationMaxTime / 10; ++i)
 		{
 			for (unsigned int j = 0; j < m_uiAnimationNodeIndexCount; ++j)
 			{
@@ -449,6 +347,112 @@ void CFbx::_SetBoneMatrix(FbxNode* pNode)
 		_SetBoneMatrix(pNode->GetChild(i));
 	}
 }
+
+void CFbx::_SetAnimationData(FbxNode* pNode)
+{
+	FbxNodeAttribute *pFbxNodeAttribute = pNode->GetNodeAttribute();
+	if (pFbxNodeAttribute && pFbxNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh)
+	{
+		FbxMesh* pMesh = pNode->GetMesh();
+
+		int *IndexArr = new int[m_iVertexSize];
+		for (int i = 0; i < m_iVertexSize; ++i)
+		{
+			IndexArr[i] = pMesh->GetPolygonVertices()[i];
+			m_VertexByIndex[IndexArr[i]].push_back(i);
+		}
+
+		FbxAMatrix geometryTransform = _GetGeometryTransformation(pNode);
+		FbxGeometry *pGeo = pNode->GetGeometry();
+		int SkinCount = pGeo->GetDeformerCount(FbxDeformer::eSkin);
+		for (int i = 0; i < SkinCount; ++i)
+		{
+			FbxSkin* pSkin = (FbxSkin*)pGeo->GetDeformer(i, FbxDeformer::eSkin);
+			int ClusterCount = pSkin->GetClusterCount();
+
+			for (int j = 0; j < ClusterCount; ++j)
+			{
+				FbxCluster *pCluster = pSkin->GetCluster(j);
+				int ClusterIndexCount = pCluster->GetControlPointIndicesCount();
+				int *ClusterIndices = pCluster->GetControlPointIndices();
+				double *ClusterWeights = pCluster->GetControlPointWeights();
+
+				for (int k = 0; k < ClusterIndexCount; k++)
+				{
+					std::string BoneName = std::string(pCluster->GetLink()->GetName());
+					int INDEX = m_IndexByName[BoneName];
+
+					FbxAMatrix transformMatrix;
+					FbxAMatrix transformLinkMatrix;
+					FbxAMatrix ResultMtx;
+
+					pCluster->GetTransformMatrix(transformMatrix); // The transformation of the mesh at binding time
+					pCluster->GetTransformLinkMatrix(transformLinkMatrix); // The transformation of the cluster(joint) at binding time from joint space to world space
+					ResultMtx = transformLinkMatrix.Inverse() * transformMatrix * geometryTransform;
+
+					for (int m = 0; m < 4; m++)
+					{
+						for (int n = 0; n < 4; n++)
+						{
+							m_pBaseBoneMatrix[INDEX].mData[m][n] = ResultMtx.Get(m, n);
+						}
+					}
+
+					float BoneWeight = static_cast<float>(ClusterWeights[k]);
+					int BoneIndex = ClusterIndices[k];
+
+					for (auto iter : m_VertexByIndex[BoneIndex])
+					{
+						if (INDEX != 0 && INDEX != -1)
+						{
+							m_pVertices[iter].AddBone(INDEX, BoneWeight);
+						}
+					}
+				}
+
+			}
+		}
+		delete[] IndexArr;
+	}
+
+	int nNodeChild = pNode->GetChildCount();
+	for (int i = 0; i < nNodeChild; ++i)
+	{
+		FbxNode* pChildNode = pNode->GetChild(i);
+		_SetAnimationData(pChildNode);
+	}
+}
+
+void CFbx::_SetAnimationMatrix(FbxNode *pNode, FbxAnimStack *FbxAS)
+{
+	if (pNode)
+	{
+		unsigned int BoneIndex = m_IndexByName[pNode->GetName()];	//m_IndexByName.size();
+
+		FbxTime maxTime = FbxAS->GetLocalTimeSpan().GetDuration();
+		for (long long i = 0; i < maxTime.GetMilliSeconds() / 10; ++i)
+		{
+			FbxTime n_time;
+			n_time.SetMilliSeconds(i * 10);
+
+			for (int m = 0; m < 4; ++m)
+			{
+				for (int n = 0; n < 4; ++n)
+				{
+					m_pAnimationMatrix[i][BoneIndex].mData[m][n] = pNode->EvaluateGlobalTransform(n_time).Get(m, n);
+				}
+			}
+		}
+	}
+
+	for (int i = 0; i < pNode->GetChildCount(); ++i)
+	{
+		_SetAnimationMatrix(pNode->GetChild(i), FbxAS);
+	}
+}
+
+
+
 
 
 

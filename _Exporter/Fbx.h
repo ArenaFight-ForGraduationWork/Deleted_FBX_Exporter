@@ -23,8 +23,8 @@ private:
 	FbxMatrix *m_pBaseBoneMatrix;
 	FbxMatrix **m_pAnimationMatrix;
 	FbxMatrix **m_ppResultMatrix;
-
-	long long m_llAnimationMaxTime;			//애니메이션 최대길이
+	
+	int m_iAnimationMaxTime;		// 애니메이션 최대 길이
 	unsigned int m_uiAnimationNodeIndexCount;	//애니메이션 노드 갯수
 	float m_fAnimationPlayTime;				//애니메이션 재생 시간
 

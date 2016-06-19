@@ -5,8 +5,6 @@
 								// m_uiAnimationNodeIndexCount = m_IndexByName.size();
 								// _matrix파일 맨 윗줄 두번째 인자
 
-
-
 CFbx::CFbx()
 {
 	m_pFbxScene = nullptr;
@@ -15,11 +13,7 @@ CFbx::CFbx()
 	m_VertexByIndex.clear();
 	m_IndexByName.clear();
 
-	m_pBaseBoneMatrix = new XMFLOAT4X4[AnimationNodeCount];
-	for (int i = 0; i < AnimationNodeCount; ++i)
-	{
-		XMStoreFloat4x4(&m_pBaseBoneMatrix[i], XMMatrixIdentity());
-	}
+	m_pBaseBoneMatrix = new FbxMatrix[AnimationNodeCount];
 	m_pAnimationMatrix = nullptr;
 	m_ppResultMatrix = nullptr;
 
@@ -27,8 +21,7 @@ CFbx::CFbx()
 	m_uiAnimationNodeIndexCount = 0;
 	m_fAnimationPlayTime = 0.0f;
 
-	temp = 0;
-	m_iSize = 0;
+	m_iVertexSize = 0;
 
 	m_pTxtName = nullptr;
 	m_pTxtNameAfterMatrix = nullptr;
@@ -72,7 +65,6 @@ FbxAMatrix CFbx::_GetGeometryTransformation(FbxNode* inNode)
 {
 	if (!inNode)
 	{
-		//throw std::exception("Null for mesh geometry");
 		Warning("Null for mesh geometry");
 	}
 
@@ -137,10 +129,9 @@ void CFbx::_WriteVertex()
 
 		const unsigned int ctrlPointCnt = pMesh->GetControlPointsCount();
 		const unsigned int polygonCnt = pMesh->GetPolygonCount();
-		const unsigned int polygonVertexCnt = pMesh->GetPolygonVertexCount();
-		m_iSize = polygonVertexCnt;
-		m_pVertices = new CAnimationVertex[m_iSize];
-		fprintf(fp, "%d\n", polygonVertexCnt);
+		m_iVertexSize = pMesh->GetPolygonVertexCount();
+		m_pVertices = new CAnimationVertex[m_iVertexSize];
+		fprintf(fp, "%d\n", m_iVertexSize);
 
 		FbxVector4 outPos;
 		FbxVector4 outNormal;
@@ -151,7 +142,7 @@ void CFbx::_WriteVertex()
 		FbxGeometryElementNormal* vertexNormal = pMesh->GetElementNormal(0);
 
 		//정점 데이터 얻기
-		for (int j = 0; j < pMesh->GetPolygonCount(); j++)		//ex) 손의 컨트롤 포인트만 가져와서
+		for (int j = 0; j < pMesh->GetPolygonCount(); j++)
 		{
 			int iNumVertieces = pMesh->GetPolygonSize(j);
 			if (iNumVertieces != 3)
@@ -225,12 +216,9 @@ void CFbx::_SetAnimationData(FbxNode* pNode)
 	if (pFbxNodeAttribute && pFbxNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh)
 	{
 		FbxMesh* pMesh = pNode->GetMesh();
-		const unsigned int IndexCount = pMesh->GetPolygonVertexCount();	//const unsigned int하면 안되던데 왤까
-		temp = IndexCount;
 
-		int *IndexArr = new int[IndexCount];
-
-		for (unsigned int i = 0; i < IndexCount; ++i)
+		int *IndexArr = new int[m_iVertexSize];
+		for (unsigned int i = 0; i < m_iVertexSize; ++i)
 		{
 			IndexArr[i] = pMesh->GetPolygonVertices()[i];
 			m_VertexByIndex[IndexArr[i]].push_back(i);
@@ -268,7 +256,7 @@ void CFbx::_SetAnimationData(FbxNode* pNode)
 					{
 						for (int n = 0; n < 4; n++)
 						{
-							m_pBaseBoneMatrix[INDEX].m[m][n] = static_cast<float>(ResultMtx.Get(m, n));
+							m_pBaseBoneMatrix[INDEX].mData[m][n] = ResultMtx.Get(m, n);
 						}
 					}
 
@@ -313,11 +301,9 @@ void CFbx::_SetAnimationMatrix(FbxNode *pNode, FbxAnimStack *FbxAS)
 			{
 				for (int n = 0; n < 4; ++n)
 				{
-					m_pAnimationMatrix[i][BoneIndex].m[m][n] = static_cast<float>((pNode->EvaluateGlobalTransform(n_time)).Get(m, n));
+					m_pAnimationMatrix[i][BoneIndex].mData[m][n] = pNode->EvaluateGlobalTransform(n_time).Get(m, n);
 				}
 			}
-
-			XMFLOAT4X4 pp = m_pAnimationMatrix[i][BoneIndex];
 		}
 	}
 
@@ -344,7 +330,6 @@ void CFbx::_WriteMinMaxPos()
 		if (AttributeType != FbxNodeAttribute::eMesh)
 			continue;
 		FbxMesh* pMesh = (FbxMesh*)pFbxChildNode->GetNodeAttribute();
-
 		FbxVector4* mControlPoints = pMesh->GetControlPoints();
 
 		//max
@@ -387,7 +372,7 @@ void CFbx::_WriteWeight()
 	strcat_s(pPath, 50, "_weight.txt");
 	fopen_s(&fp, pPath, "wt");
 
-	for (int i = 0; i < temp; ++i)
+	for (int i = 0; i < m_iVertexSize; ++i)
 	{
 		for (int j = 0; j < 8; ++j)
 		{
@@ -416,23 +401,20 @@ void CFbx::_WriteAnimationMatrix()
 	FbxAnimStack* AnimStack = m_pFbxScene->GetSrcObject<FbxAnimStack>();
 	if (AnimStack)
 	{
-		//애니메이션 데이터 불러오기
-
 		//애니메이션 최대길이
 		m_llAnimationMaxTime = AnimStack->GetLocalTimeSpan().GetDuration().GetMilliSeconds();
-		cout << "애니메이션 최대길이 : " << m_llAnimationMaxTime << endl;
 
 		//애니메이션에 영향을 받는 animation Node 개수
 		m_uiAnimationNodeIndexCount = m_IndexByName.size();
 
 		//애니메이션 2차원 배열 생성
-		m_pAnimationMatrix = new XMFLOAT4X4*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
-		m_ppResultMatrix = new XMFLOAT4X4*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];		//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
+		m_pAnimationMatrix = new FbxMatrix*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션행렬 배열 할당
+		m_ppResultMatrix = new FbxMatrix*[static_cast<unsigned int>(m_llAnimationMaxTime) / 10];	//최대시간/10만큼 애니메이션 최종 변환행렬 배열 할당
 
 		for (long long i = 0; i < m_llAnimationMaxTime / 10; ++i)
 		{
-			m_pAnimationMatrix[i] = new XMFLOAT4X4[m_uiAnimationNodeIndexCount];	//i번째 시간대 : 배열에 애니메이션 노드 개수만큼 배열 할당
-			m_ppResultMatrix[i] = new XMFLOAT4X4[m_uiAnimationNodeIndexCount];		//i번째 시간대 : 최종변환행렬에 애니메이션 노드 개수만큼 배열 할당
+			m_pAnimationMatrix[i] = new FbxMatrix[m_uiAnimationNodeIndexCount];	//i번째 시간대 : 배열에 애니메이션 노드 개수만큼 배열 할당
+			m_ppResultMatrix[i] = new FbxMatrix[m_uiAnimationNodeIndexCount];	//i번째 시간대 : 최종변환행렬에 애니메이션 노드 개수만큼 배열 할당
 		}
 
 		//Animation Matrix채우기
@@ -444,15 +426,12 @@ void CFbx::_WriteAnimationMatrix()
 		{
 			for (unsigned int j = 0; j < m_uiAnimationNodeIndexCount; ++j)
 			{
-				XMMATRIX BaseBoneMatrixTEMP = XMLoadFloat4x4(&m_pBaseBoneMatrix[j]);
-				XMMATRIX AnimationMatrixTEMP = XMLoadFloat4x4(&m_pAnimationMatrix[i][j]);
-
-				XMStoreFloat4x4(&m_ppResultMatrix[i][j], (BaseBoneMatrixTEMP * AnimationMatrixTEMP));
+				m_ppResultMatrix[i][j] = m_pBaseBoneMatrix[j] * m_pAnimationMatrix[i][j];
 				for (int k = 0; k < 4; ++k)
 				{
 					for (int l = 0; l < 4; ++l)
 					{
-						fprintf(fp, "%f\n", m_ppResultMatrix[i][j](k, l));
+						fprintf(fp, "%f\n", m_ppResultMatrix[i][j].mData[k][l]);
 					}
 				}
 			}

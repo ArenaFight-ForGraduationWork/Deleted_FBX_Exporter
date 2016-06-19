@@ -20,17 +20,15 @@ private:
 	map<unsigned int, vector<unsigned int>> m_VertexByIndex;
 	std::map<std::string, unsigned int> m_IndexByName;
 
-	//FbxMatrix로 변경
-	XMFLOAT4X4 *m_pBaseBoneMatrix;		//애니메이션 BaseMatrix[인덱스]
-	XMFLOAT4X4 **m_pAnimationMatrix;	//애니메이션 Matrix[시간][인덱스]
-	XMFLOAT4X4 **m_ppResultMatrix;
+	FbxMatrix *m_pBaseBoneMatrix;
+	FbxMatrix **m_pAnimationMatrix;
+	FbxMatrix **m_ppResultMatrix;
 
 	long long m_llAnimationMaxTime;			//애니메이션 최대길이
 	unsigned int m_uiAnimationNodeIndexCount;	//애니메이션 노드 갯수
 	float m_fAnimationPlayTime;				//애니메이션 재생 시간
 
-	int temp;
-	int m_iSize;
+	int m_iVertexSize;
 
 	char *m_pTxtName;
 	char *m_pTxtNameAfterMatrix;
